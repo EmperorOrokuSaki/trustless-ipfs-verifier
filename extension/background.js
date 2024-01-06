@@ -1,63 +1,76 @@
-const integrityFailedUrl = chrome.runtime.getURL("integrity-failed.html")
-const fleekIPFS = "bafybeic5242ao473gu35azmjvkd54ikimzbvy6f34vki4l22nxpy6ngm6m"
+const integrityFailedUrl = chrome.runtime.getURL('integrity-failed.html')
+const fleekIPFS = 'bafybeic5242ao473gu35azmjvkd54ikimzbvy6f34vki4l22nxpy6ngm6m'
 let isIntercepting = false
-
-function b64DecodeUnicode(str) {
+let intercepted = false
+function b64DecodeUnicode (str) {
   // Going backwards: from bytestream, to percent-encoding, to original string.
-  return decodeURIComponent(atob(str).split('').map(function(c) {
-      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-  }).join(''));
+  return decodeURIComponent(
+    atob(str)
+      .split('')
+      .map(function (c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+      })
+      .join('')
+  )
 }
 
-const getSha256Hash = async (input) => {
+const getSha256Hash = async input => {
   const textAsBuffer = new TextEncoder().encode(input)
-  const hashBuffer = await crypto.subtle.digest("SHA-256", textAsBuffer)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', textAsBuffer)
   const hashArray = Array.from(new Uint8Array(hashBuffer))
   const hash = hashArray
-    .map((item) => item.toString(16).padStart(2, "0"))
-    .join("")
+    .map(item => item.toString(16).padStart(2, '0'))
+    .join('')
   return hash
 }
 
-const disableDnrBlock = async () => chrome.declarativeNetRequest.updateDynamicRules({
-  addRules: [],
-  removeRuleIds: [1]
-})
+const disableDnrBlock = async () =>
+  chrome.declarativeNetRequest.updateDynamicRules({
+    addRules: [],
+    removeRuleIds: [1]
+  })
 
 const enableDnrBlock = async () =>
   chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: [1],
-    addRules: [{
-      id: 1,
-      priority: 1,
-      action: { type: "block" },
-      condition: { urlFilter: "https://fleek.xyz/*", resourceTypes: ["main_frame"] }
-    }]
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: { type: 'block' },
+        condition: {
+          urlFilter: 'https://fleek.xyz/*',
+          resourceTypes: ['main_frame']
+        }
+      }
+    ]
   })
 
 const handleRequestIntercepted = async (debuggeeId, message, params) => {
-  const tabId = debuggeeId.tabId;
+  const tabId = debuggeeId.tabId
   // Check the response integrity of the server before sending it to the user
-  if (message === "Fetch.requestPaused") {
-    const response = await chrome.debugger.sendCommand(debuggeeId, "Fetch.getResponseBody", {
-      requestId: params.requestId
-    })
-    const decoded = response.base64Encoded ? b64DecodeUnicode(response.body) : response.body
+  if (message === 'Fetch.requestPaused') {
+    const response = await chrome.debugger.sendCommand(
+      debuggeeId,
+      'Fetch.getResponseBody',
+      {
+        requestId: params.requestId
+      }
+    )
+    const decoded = response.base64Encoded
+      ? b64DecodeUnicode(response.body)
+      : response.body
     const hashed = await getSha256Hash(decoded)
 
-    const fleekResponse = await fetch("https://ipfs.io/ipfs/" + fleekIPFS).then(response => {
-      if (!response.ok) {
-        throw new Error("HTTP error " + response.status);
+    const fleekResponse = await fetch('https://ipfs.io/ipfs/' + fleekIPFS).then(
+      response => {
+        if (!response.ok) {
+          throw new Error('HTTP error ' + response.status)
+        }
+        return response.text()
       }
-      return response.text();
-    });
-    const integrityHash = await getSha256Hash(fleekResponse);
-
-    console.log(fleekResponse);
-    console.log(decoded);
-
-    console.log('integrity hash: ' + integrityHash);
-    console.log('hashed: ' + hashed);
+    )
+    const integrityHash = await getSha256Hash(fleekResponse)
 
     // This listener needs to be removed as a new debugger handler will be set up on the next request
     await chrome.debugger.onEvent.removeListener(handleRequestIntercepted)
@@ -66,9 +79,9 @@ const handleRequestIntercepted = async (debuggeeId, message, params) => {
     const integrityPassed = hashed === integrityHash
 
     if (!integrityPassed) {
-      await chrome.debugger.sendCommand(debuggeeId, "Fetch.failRequest", {
+      await chrome.debugger.sendCommand(debuggeeId, 'Fetch.failRequest', {
         requestId: params.requestId,
-        errorReason: "BlockedByClient"
+        errorReason: 'BlockedByClient'
       })
 
       // Re-block server so that future requests are re-verified
@@ -79,13 +92,14 @@ const handleRequestIntercepted = async (debuggeeId, message, params) => {
     }
 
     // If integrity passes, continue the request
-    await chrome.debugger.sendCommand(debuggeeId, "Fetch.continueRequest", {
+    await chrome.debugger.sendCommand(debuggeeId, 'Fetch.continueRequest', {
       requestId: params.requestId
     })
 
     // Re-block server so that future requests are re-verified
     await enableDnrBlock()
     await chrome.debugger.detach({ tabId })
+    intercepted = true
     isIntercepting = false
   }
 }
@@ -93,26 +107,29 @@ const handleRequestIntercepted = async (debuggeeId, message, params) => {
 chrome.runtime.onInstalled.addListener(async () => {
   // Ensure requests to the server are automatically blocked by DNR
   await enableDnrBlock()
+})
 
-  // When the request is blocked by DNR, intercept it here
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Don't intercept while we're already intercepting
-    if (isIntercepting) return
+// When the request is blocked by DNR, intercept it here
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // Don't intercept while we're already intercepting
+  if (isIntercepting) return
 
-    // Only intercept the server we're interested in verifying
-    if (!(tab.url.includes("https://fleek.xyz") && changeInfo.status === "loading")) return
+  // Only intercept the server we're interested in verifying
+  if (
+    !(tab.url.includes('https://fleek.xyz') && changeInfo.status === 'loading')
+  )
+    return
 
-    // Attach a debugger to the tab in order to intercept the next request we make to the server
-    await chrome.debugger.attach({ tabId }, "1.3")
-    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
-      patterns: [{ urlPattern: 'https://fleek.xyz/*', requestStage: 'Response' }]
-    })
-
-    chrome.debugger.onEvent.addListener(handleRequestIntercepted)
-
-    // Now we have our debugger set up to intercept the request, re-trigger the request
-    await disableDnrBlock()
-    isIntercepting = true
-    await chrome.tabs.reload(tabId)
+  // Attach a debugger to the tab in order to intercept the next request we make to the server
+  await chrome.debugger.attach({ tabId }, '1.3')
+  await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
+    patterns: [{ urlPattern: 'https://fleek.xyz/', requestStage: 'Response' }]
   })
+
+  chrome.debugger.onEvent.addListener(handleRequestIntercepted)
+
+  // Now we have our debugger set up to intercept the request, re-trigger the request
+  await disableDnrBlock()
+  isIntercepting = true
+  if (!intercepted) await chrome.tabs.reload(tabId)
 })
