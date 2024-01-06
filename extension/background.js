@@ -1,6 +1,13 @@
 const integrityFailedUrl = chrome.runtime.getURL("integrity-failed.html")
-const integriyHash = "5f12982f36c37e0ebe258c7b525aba48c08d737855233a89ccbabc4f795c79fa"
+const fleekIPFS = "bafybeic5242ao473gu35azmjvkd54ikimzbvy6f34vki4l22nxpy6ngm6m"
 let isIntercepting = false
+
+function b64DecodeUnicode(str) {
+  // Going backwards: from bytestream, to percent-encoding, to original string.
+  return decodeURIComponent(atob(str).split('').map(function(c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+  }).join(''));
+}
 
 const getSha256Hash = async (input) => {
   const textAsBuffer = new TextEncoder().encode(input)
@@ -24,7 +31,7 @@ const enableDnrBlock = async () =>
       id: 1,
       priority: 1,
       action: { type: "block" },
-      condition: { urlFilter: "http://localhost:9191/*", resourceTypes: ["main_frame"] }
+      condition: { urlFilter: "https://fleek.xyz/*", resourceTypes: ["main_frame"] }
     }]
   })
 
@@ -35,14 +42,28 @@ const handleRequestIntercepted = async (debuggeeId, message, params) => {
     const response = await chrome.debugger.sendCommand(debuggeeId, "Fetch.getResponseBody", {
       requestId: params.requestId
     })
-    const decoded = response.base64Encoded ? atob(response.body) : response.body
+    const decoded = response.base64Encoded ? b64DecodeUnicode(response.body) : response.body
     const hashed = await getSha256Hash(decoded)
+
+    const fleekResponse = await fetch("https://ipfs.io/ipfs/" + fleekIPFS).then(response => {
+      if (!response.ok) {
+        throw new Error("HTTP error " + response.status);
+      }
+      return response.text();
+    });
+    const integrityHash = await getSha256Hash(fleekResponse);
+
+    console.log(fleekResponse);
+    console.log(decoded);
+
+    console.log('integrity hash: ' + integrityHash);
+    console.log('hashed: ' + hashed);
 
     // This listener needs to be removed as a new debugger handler will be set up on the next request
     await chrome.debugger.onEvent.removeListener(handleRequestIntercepted)
 
     // If integrity fails, fail the request and redirect user to a safe page
-    const integrityPassed = hashed === integriyHash
+    const integrityPassed = hashed === integrityHash
 
     if (!integrityPassed) {
       await chrome.debugger.sendCommand(debuggeeId, "Fetch.failRequest", {
@@ -79,12 +100,12 @@ chrome.runtime.onInstalled.addListener(async () => {
     if (isIntercepting) return
 
     // Only intercept the server we're interested in verifying
-    if (!(tab.url.includes("http://localhost:9191") && changeInfo.status === "loading")) return
+    if (!(tab.url.includes("https://fleek.xyz") && changeInfo.status === "loading")) return
 
     // Attach a debugger to the tab in order to intercept the next request we make to the server
     await chrome.debugger.attach({ tabId }, "1.3")
     await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
-      patterns: [{ urlPattern: 'http://localhost:9191/*', requestStage: 'Response' }]
+      patterns: [{ urlPattern: 'https://fleek.xyz/*', requestStage: 'Response' }]
     })
 
     chrome.debugger.onEvent.addListener(handleRequestIntercepted)
