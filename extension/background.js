@@ -1,3 +1,9 @@
+import { createHelia } from 'https://esm.sh/helia@next'
+import { trustlessGateway } from 'https://esm.sh/helia@next/block-brokers'
+import { unixfs } from 'https://esm.sh/@helia/unixfs@latest'
+import { CID } from 'https://esm.sh/multiformats@latest'
+import debug from 'https://esm.sh/debug@latest'
+
 const integrityFailedUrl = chrome.runtime.getURL('integrity-failed.html')
 const fleekIPFS = 'bafybeic5242ao473gu35azmjvkd54ikimzbvy6f34vki4l22nxpy6ngm6m'
 let isIntercepting = false
@@ -12,6 +18,25 @@ function b64DecodeUnicode (str) {
       })
       .join('')
   )
+}
+
+debug.enable('*trustless-gateway*,helia:trustless-gateway-block-broker:trace')
+
+const helia = await createHelia({
+  blockBrokers: [
+    trustlessGateway()
+  ],
+  libp2p: {
+    start: false,
+  }
+})
+const hFs = unixfs(helia)
+
+async function getCID(cidString) {
+  const cid = CID.parse(cidString)
+  for await (const content of hFs.cat(cid)) {
+    console.log(content);
+  }
 }
 
 const getSha256Hash = async input => {
@@ -71,7 +96,7 @@ const handleRequestIntercepted = async (debuggeeId, message, params) => {
       }
     )
     const integrityHash = await getSha256Hash(fleekResponse)
-
+    getCID(fleekIPFS);
     // This listener needs to be removed as a new debugger handler will be set up on the next request
     await chrome.debugger.onEvent.removeListener(handleRequestIntercepted)
 
